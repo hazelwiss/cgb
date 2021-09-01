@@ -4,8 +4,7 @@
     The processor of the GB runs at a clock speed of around 4.19Mhz
 */
 #pragma once
-#include<stddef.h>
-#include<stdint.h>
+#include<utility.h>
 #include"memory.h"
 
 #define REGISTER_UNION(UPPER, LOWER)    \
@@ -29,8 +28,10 @@ typedef struct{
     uint16_t pc;
     Memory memory;
     size_t t_cycles;
+    bool ime;
 } CPU;
 
 CPU* createCPU(void);
+void destroyCPU(CPU*);
 
 void updateCPU(CPU*);

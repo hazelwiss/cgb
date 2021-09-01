@@ -1,7 +1,6 @@
 #include"cpu.h"
-#include<stdbool.h>
+#include<string.h>
 
-#define PANIC assert(false)
 #define TICK_M(cycles) cpu->t_cycles+=4*cycles;
 #define SET_Z(state) cpu->f.z = (state) != 0
 #define SET_N(state) cpu->f.n = (state) != 0
@@ -21,7 +20,7 @@ typedef enum{
 
 static uint8_t fetch(CPU* cpu){
     TICK_M(1);
-    return read(cpu, cpu->pc++);
+    return read(&cpu->memory, cpu->pc++);
 }
 
 static uint8_t fetch16(CPU* cpu){
@@ -37,6 +36,38 @@ static uint8_t cpuRead(CPU* cpu, uint16_t adr){
 static void cpuWrite(CPU* cpu, uint16_t adr, uint8_t val){
     TICK_M(1);
     write(&cpu->memory, adr, val);
+}
+
+uint8_t determineRegister(CPU* cpu, uint8_t opc){
+    switch(opc%8)
+    {
+    case 0: return cpu->b;
+    case 1: return cpu->c;
+    case 2: return cpu->d;
+    case 3: return cpu->e;
+    case 4: return cpu->h;
+    case 5: return cpu->l;
+    case 6: return cpuRead(cpu, cpu->hl);
+    case 7: return cpu->a;
+    }
+    PANIC;
+    return 0;
+}
+
+uint8_t* determineRegisterCB(CPU* cpu, uint8_t opc){
+    switch(opc%8)
+    {
+    case 0: return &cpu->b;
+    case 1: return &cpu->c;
+    case 2: return &cpu->d;
+    case 3: return &cpu->e;
+    case 4: return &cpu->h;
+    case 5: return &cpu->l;
+    case 6: break;
+    case 7: return &cpu->a;
+    }
+    PANIC;
+    return NULL;
 }
 
 //  LOAD INSTRUCTIONS
@@ -135,24 +166,6 @@ static void LD_SP_HL(CPU* cpu){
     TICK_M(1);
 }
 
-//  MISC INSTRUCTIONS
-
-static void NOP(CPU* cpu){}
-
-static void DAA(CPU* cpu){}
-
-static void HALT(CPU* cpu){}
-
-static void CB(CPU* cpu){}
-
-static void CCF(CPU* cpu){}
-
-static void DI(CPU* cpu){}
-
-static void EI(CPU* cpu){}
-
-static void SCF(CPU* cpu){}
-
 //  ALU INSTRUCTIONS
 
 /* ADC */
@@ -168,10 +181,6 @@ static void ADC_r8(CPU* cpu, uint8_t src){
     __ADC(cpu, src, cpu->f.c);
 }
 
-static void ADC_pHL(CPU* cpu){
-    __ADC(cpu, cpuRead(cpu, cpu->hl), cpu->f.c);
-}
-
 static void ADC_u8(CPU* cpu){
     __ADC(cpu, fetch(cpu), cpu->f.c);
 }
@@ -180,10 +189,6 @@ static void ADC_u8(CPU* cpu){
 
 static void ADD_r8(CPU* cpu, uint8_t src){
     __ADC(cpu, src, 0);
-}
-
-static void ADD_pHL(CPU* cpu){
-    __ADC(cpu, cpuRead(cpu, cpu->hl), 0);
 }
 
 static void ADD_u8(CPU* cpu){
@@ -203,10 +208,6 @@ static void CP_r8(CPU* cpu, uint8_t src){
     __CP(cpu, src);
 }
 
-static void CP_pHL(CPU* cpu){
-    __CP(cpu, cpuRead(cpu, cpu->hl));
-}
-
 static void CP_u8(CPU* cpu){
     __CP(cpu, fetch(cpu));
 }
@@ -215,7 +216,7 @@ static void CP_u8(CPU* cpu){
 
 static void CPL(CPU* cpu){
     cpu->a = ~cpu->a;
-    set_N(true);
+    SET_N(true);
     SET_H(true);
 }
 
@@ -267,7 +268,7 @@ static void INC_r16(CPU* cpu, uint16_t* dest){
 
 /* SBC */
 
-__always_inline __SBC(CPU* cpu, uint8_t src, bool carry){
+__always_inline void __SBC(CPU* cpu, uint8_t src, bool carry){
     SET_N(true);
     SET_H((cpu->a&0x0F) < (src&0x0F) + carry);
     SET_C(cpu->a < src + carry);
@@ -279,11 +280,6 @@ static void SBC_r8(CPU* cpu, uint8_t src){
     __SBC(cpu, src, cpu->f.c);
 }
 
-static void SBC_pHL(CPU* cpu){
-    uint8_t val = cpuRead(cpu, cpu->hl);
-    __SBC(cpu, val, cpu->f.c);
-}
-
 static void SBC_u8(CPU* cpu){
     __SBC(cpu, fetch(cpu), cpu->f.c);
 }
@@ -292,11 +288,6 @@ static void SBC_u8(CPU* cpu){
 
 static void SUB_r8(CPU* cpu, uint8_t src){
     __SBC(cpu, src, 0);
-}
-
-static void SUB_pHL(CPU* cpu){
-    uint8_t val = cpuRead(cpu, cpu->hl);
-    __SBC(cpu, val, 0);
 }
 
 static void SUB_u8(CPU* cpu){
@@ -316,8 +307,8 @@ static void ADD_SP_i8(CPU* cpu){
     uint8_t imm = fetch(cpu);
     SET_Z(false);
     SET_N(false);
-    SET_H(cpu->sp&0x0F < imm&0x0F);
-    SET_C(cpu->sp&0xFF < imm);
+    SET_H((cpu->sp&0x0F) < (imm&0x0F));
+    SET_C((cpu->sp&0xFF) < imm);
     cpu->sp += (int8_t)imm;
 }
 
@@ -326,7 +317,7 @@ static void ADD_SP_i8(CPU* cpu){
 /* BIT */
 
 __always_inline void __BIT(CPU* cpu, uint8_t bit, uint8_t val){
-    SET_Z(val&bit == 0);
+    SET_Z((val&bit) == 0);
     SET_N(false);
     SET_H(true);
 }
@@ -353,10 +344,6 @@ static void AND_r8(CPU* cpu, uint8_t src){
     __AND(cpu, src);
 }
 
-static void AND_pHL(CPU* cpu){
-    __AND(cpu, cpuRead(cpu, cpu->hl));
-}
-
 static void AND_u8(CPU* cpu){
     __AND(cpu, fetch(cpu));
 }
@@ -372,119 +359,463 @@ __always_inline void __OR(CPU* cpu, uint8_t src){
 }
 
 static void OR_r8(CPU* cpu, uint8_t src){
-    
+    __OR(cpu, src);
 }
 
-static void OR_pHL(CPU* cpu){}
+static void OR_u8(CPU* cpu){
+    __OR(cpu, fetch(cpu));
+}
 
-static void OR_u8(CPU* cpu){}
+/* RES */
 
-static void RES_u3_r8(CPU* cpu){}
+__always_inline void __RES(CPU* cpu, uint8_t bit, uint8_t* dest){
+    *dest &= ~bit;
+}
 
-static void RES_u3_pHL(CPU* cpu){}
+static void RES_u3_r8(CPU* cpu, uint8_t bit, uint8_t* dest){
+    __RES(cpu, bit, dest);
+}
 
-static void RL_r8(CPU* cpu){}
+static void RES_u3_pHL(CPU* cpu, uint8_t bit){
+    uint8_t val = cpuRead(cpu, cpu->hl);
+    __RES(cpu, bit, &val);
+    cpuWrite(cpu, cpu->hl, val);
+}
 
-static void RL_pHL(CPU* cpu){}
+/* RL */
 
-static void RLA(CPU* cpu){}
+__always_inline void __RL(CPU* cpu, uint8_t* dest){
+    SET_N(false);
+    SET_H(false);
+    uint8_t c = cpu->f.c;
+    SET_C(*dest&0x80);
+    *dest <<= 1;
+    *dest |= c;
+    SET_Z(*dest == 0);
+}
 
-static void RLC_r8(CPU* cpu){}
+static void RL_r8(CPU* cpu, uint8_t* dest){
+    __RL(cpu, dest);
+}
 
-static void RLC_pHL(CPU* cpu){}
+static void RL_pHL(CPU* cpu){
+    uint8_t val = cpuRead(cpu, cpu->hl);
+    __RL(cpu, &val);
+    cpuWrite(cpu, cpu->hl, val);
+}
 
-static void RLCA(CPU* cpu){}
+static void RLA(CPU* cpu){
+    __RL(cpu, &cpu->a);
+    SET_Z(false);
+}
 
-static void RR_r8(CPU* cpu){}
+/* RLC */
 
-static void RR_pHL(CPU* cpu){}
+__always_inline void __RLC(CPU* cpu, uint8_t* dest){
+    SET_N(false);
+    SET_H(false);
+    uint8_t hb = *dest >> 7;
+    SET_C(*dest&0x80);
+    *dest <<= 1;
+    *dest |= hb;
+    SET_Z(*dest == 0);
+}
 
-static void RRA(CPU* cpu){}
+static void RLC_r8(CPU* cpu, uint8_t* dest){
+    __RLC(cpu, dest);
+}
 
-static void RRC_r8(CPU* cpu){}
+static void RLC_pHL(CPU* cpu){
+    uint8_t val = cpuRead(cpu, cpu->hl);
+    __RLC(cpu, &val);
+    cpuWrite(cpu, cpu->hl, val);
+}
 
-static void RRC_pHL(CPU* cpu){}
+static void RLCA(CPU* cpu){
+    __RLC(cpu, &cpu->a);
+    SET_Z(false);
+}
 
-static void RRCA(CPU* cpu){}
+/* RR */
 
-static void SET_u3_r8(CPU* cpu){}
+__always_inline void __RR(CPU* cpu, uint8_t* dest){
+    SET_N(false);
+    SET_H(false);
+    uint8_t c = cpu->f.c;
+    SET_C(*dest & 0x01);
+    *dest >>= 1;
+    *dest |= (c << 7);
+    SET_Z(*dest == 0);
+}
 
-static void SET_u3_pHL(CPU* cpu){}
+static void RR_r8(CPU* cpu, uint8_t* dest){
+    __RR(cpu, dest);
+}
 
-static void SLA_r8(CPU* cpu){}
+static void RR_pHL(CPU* cpu){
+    uint8_t val = cpuRead(cpu, cpu->hl);
+    __RR(cpu, &val);
+    cpuWrite(cpu, cpu->hl, val);
+}
 
-static void SLA_pHL(CPU* cpu){}
+static void RRA(CPU* cpu){
+    __RR(cpu, &cpu->a);
+}
 
-static void SRA_r8(CPU* cpu){}
+/* RRC */
 
-static void SRA_pHL(CPU* cpu){}
+__always_inline void __RRC(CPU* cpu, uint8_t* dest){
+    SET_N(false);
+    SET_H(false);
+    SET_C(*dest & 0x01);
+    *dest >>= 1;
+    SET_Z(*dest == 0);
+}
 
-static void SRL_r8(CPU* cpu){}
+static void RRC_r8(CPU* cpu, uint8_t *dest){
+    __RRC(cpu, dest);
+}
 
-static void SRL_pHL(CPU* cpu){}
+static void RRC_pHL(CPU* cpu){
+    uint8_t val = cpuRead(cpu, cpu->hl);
+    __RRC(cpu, &val);
+    cpuWrite(cpu, cpu->hl, val);
+}
 
-static void STOP(CPU* cpu){}
+static void RRCA(CPU* cpu){
+    __RRC(cpu, &cpu->a);
+}
 
-static void SWAP_r8(CPU* cpu){}
+/* SET */
 
-static void SWAP_pHL(CPU* cpu){}
+__always_inline void __SET(CPU* cpu, uint8_t bit, uint8_t* dest){
+    *dest |= bit;
+}
 
-static void XOR_r8(CPU* cpu, uint8_t src){}
+static void SET_u3_r8(CPU* cpu, uint8_t bit, uint8_t* dest){
+    __SET(cpu, bit, dest);
+}
 
-static void XOR_pHL(CPU* cpu){}
+static void SET_u3_pHL(CPU* cpu, uint8_t bit){
+    uint8_t val = cpuRead(cpu, cpu->hl);
+    __SET(cpu, bit, &val);
+    cpuWrite(cpu, cpu->hl, val);
+}
 
-static void XOR_u8(CPU* cpu){}
+/* SLA */
 
-//  CONTROL OPERATIONS
+__always_inline void __SLA(CPU* cpu, uint8_t* dest){
+    SET_N(false);
+    SET_H(false);
+    SET_C(*dest & 0x80);
+    *dest <<= 1; 
+    SET_Z(*dest == 0);
+}
 
-static void CALL_u16(CPU* cpu){}
+static void SLA_r8(CPU* cpu, uint8_t* dest){
+    __SLA(cpu, dest);
+}
 
-static void CALL_cc_u16(CPU* cpu, bool cond){}
+static void SLA_pHL(CPU* cpu){
+    uint8_t val = cpuRead(cpu, cpu->hl);
+    __SLA(cpu, &val);
+    cpuWrite(cpu, cpu->hl, val);
+}
 
-static void JP_u16(CPU* cpu){}
+/* SRA */
 
-static void JP_cc_u16(CPU* cpu, bool cond){}
+__always_inline void __SRA(CPU* cpu, uint8_t* dest){
+    SET_N(false);
+    SET_H(false);
+    SET_C(*dest & 0x01);
+    uint8_t hb = *dest & 0x80;
+    *dest >>= 1;
+    *dest |= hb;
+    SET_Z(*dest == 0);
+}
 
-static void JP_HL(CPU* cpu){}
+static void SRA_r8(CPU* cpu, uint8_t* dest){
+    __SRA(cpu, dest);
+}
 
-static void JR_i8(CPU* cpu){}
+static void SRA_pHL(CPU* cpu){
+    uint8_t val = cpuRead(cpu, cpu->hl);
+    __SRA(cpu, &val);
+    cpuWrite(cpu, cpu->hl, val);
+}
 
-static void JR_cc_i8(CPU* cpu, bool cond){}
+/* SRL */
 
-static void RET(CPU* cpu){}
+__always_inline void __SRL(CPU* cpu, uint8_t* dest){
+    SET_N(false);
+    SET_H(false);
+    SET_C(*dest & 0x01);
+    *dest >>= 1;
+    SET_Z(*dest == 0);
+}
 
-static void RET_cc(CPU* cpu, bool cond){}
+static void SRL_r8(CPU* cpu, uint8_t* dest){
+    __SRL(cpu, dest);
+}
 
-static void RETI(CPU* cpu){}
+static void SRL_pHL(CPU* cpu){
+    uint8_t val = cpuRead(cpu, cpu->hl);
+    __SRL(cpu, &val);
+    cpuWrite(cpu, cpu->hl, val);
+}
 
-static void RST(CPU* cpu, RESET_VEC vec){}
+/* STOP */
+
+static void STOP(CPU* cpu){
+    PANIC;
+}
+
+/* SWAP */
+
+__always_inline void __SWAP(CPU* cpu, uint8_t* dest){
+    SET_N(false);
+    SET_H(false);
+    SET_C(false);
+    SET_Z(*dest == 0);
+    *dest = (*dest << 4) | (*dest >> 4);
+}
+
+static void SWAP_r8(CPU* cpu, uint8_t* dest){
+    __SWAP(cpu, dest);
+}
+
+static void SWAP_pHL(CPU* cpu){
+    uint8_t val = cpuRead(cpu, cpu->hl);
+    __SWAP(cpu, &val);
+    cpuWrite(cpu, cpu->hl, val);
+}
+
+/* XOR */
+
+__always_inline void __XOR(CPU* cpu, uint8_t src){
+    SET_N(false);
+    SET_H(false);
+    SET_C(false);
+    cpu->a ^= src;
+    SET_Z(cpu->a == 0);
+}
+
+static void XOR_r8(CPU* cpu, uint8_t src){
+    __XOR(cpu, src);
+}
+
+static void XOR_u8(CPU* cpu){
+    __XOR(cpu, fetch(cpu));
+}
 
 //  STACK OPERATIONS
 
-static void POP_r16(CPU* cpu, uint16_t* dest){}
+static void POP_r16(CPU* cpu, uint16_t* dest){
+    uint16_t val = 0;
+    val |= cpuRead(cpu, cpu->sp++);
+    val |= cpuRead(cpu, cpu->sp++) << 8;
+    *dest = val;
+}
 
-static void POP_AF(CPU* cpu){}
+static void PUSH_r16(CPU* cpu, uint16_t src){
+    cpuWrite(cpu, --cpu->sp, src >> 8);
+    cpuWrite(cpu, --cpu->sp, src);
+    TICK_M(1);
+}
 
-static void PUSH_r16(CPU* cpu, uint16_t src){}
+static void PUSH_AF(CPU* cpu){
+    cpuWrite(cpu, --cpu->sp, cpu->af >> 8);
+    uint8_t flagbyte = (cpu->f.c << 4) | (cpu->f.h << 5) | (cpu->f.n << 6) | (cpu->f.z << 7);
+    cpuWrite(cpu, --cpu->sp, flagbyte);
+    TICK_M(1);
+}
 
-uint8_t determineRegister(CPU* cpu, uint8_t opc){
-    switch(opc%8)
-    {
-    case 0: return cpu->b;
-    case 1: return cpu->c;
-    case 2: return cpu->d;
-    case 3: return cpu->e;
-    case 4: return cpu->h;
-    case 5: return cpu->l;
-    case 6: return read(&cpu->memory, cpu->hl);
-    case 7: return cpu->a;
+//  MISC INSTRUCTIONS
+
+static void NOP(CPU* cpu){}
+
+static void DAA(CPU* cpu){}
+
+static void HALT(CPU* cpu){}
+
+static void CCF(CPU* cpu){
+    SET_N(false);
+    SET_H(false);
+    SET_C(!cpu->f.c);
+}
+
+static void DI(CPU* cpu){
+    cpu->ime = false;
+}
+
+static void EI(CPU* cpu){
+    cpu->ime = true;
+}
+
+static void SCF(CPU* cpu){
+    SET_N(false);
+    SET_H(false);
+    SET_C(true);
+}
+
+static void CB(CPU* cpu){
+    uint8_t opc = fetch(cpu);
+    switch (opc){
+    case 0x00 ... 0x05:
+    case 0x07:
+        RLC_r8(cpu, determineRegisterCB(cpu, opc));
+        break;
+    case 0x06:
+        RLC_pHL(cpu);
+        break;
+
+    case 0x08 ... 0x0D:
+    case 0x0F:
+        RRC_r8(cpu, determineRegisterCB(cpu, opc));
+        break;
+    case 0x0E:
+        RRC_pHL(cpu);
+        break;
+
+    case 0x10 ... 0x15:
+    case 0x17:
+        RL_r8(cpu, determineRegisterCB(cpu, opc));
+        break;
+    case 0x16:
+        RL_pHL(cpu);
+        break;
+
+    case 0x18 ... 0x1D:
+    case 0x1F:
+        RR_r8(cpu, determineRegisterCB(cpu, opc));
+        break;
+    case 0x1E:
+        RR_pHL(cpu);
+        break;
+
+    case 0x20 ... 0x25:
+    case 0x27:
+        SLA_r8(cpu, determineRegisterCB(cpu, opc));
+        break;
+    case 0x26:
+        SLA_pHL(cpu);
+        break;
+
+    case 0x28 ... 0x2D:
+    case 0x2F:
+        SRA_r8(cpu, determineRegisterCB(cpu, opc));
+        break;
+    case 0x2E:
+        SRA_pHL(cpu);
+        break;
+
+    case 0x30 ... 0x35:
+    case 0x37:
+        SWAP_r8(cpu, determineRegisterCB(cpu, opc));
+        break;
+    case 0x36:
+        SWAP_pHL(cpu);
+        break;
+
+    case 0x38 ... 0x3D:
+    case 0x3F:
+        SRL_r8(cpu, determineRegisterCB(cpu, opc));
+        break;
+    case 0x3E:
+        SRL_pHL(cpu);
+        break;
+    
+    case 0x40 ... 0x7F:
+        if(opc%8 != 6)
+            BIT_u3_r8(cpu, opc/8, *determineRegisterCB(cpu, opc));
+        else 
+            BIT_u3_pHL(cpu, opc/8);
+    case 0x80 ... 0xBF:
+        if(opc%8 != 6)
+            RES_u3_r8(cpu, opc/8, determineRegisterCB(cpu, opc));
+        else
+            RES_u3_pHL(cpu, opc/8);
+    case 0xC0 ... 0xFF:
+        if(opc%8 != 6)
+            SET_u3_r8(cpu, opc/8, determineRegisterCB(cpu, opc));
+        else
+            SET_u3_pHL(cpu, opc/8);
     }
 }
 
+//  CONTROL OPERATIONS
+
+static void CALL_u16(CPU* cpu){
+    uint16_t imm = fetch16(cpu);
+    PUSH_r16(cpu, cpu->pc);
+    cpu->pc = imm;
+    TICK_M(1);
+}
+
+static void CALL_cc_u16(CPU* cpu, bool cond){
+    if(cond)
+        CALL_u16(cpu);
+    else
+        TICK_M(2);
+}
+
+static void JP_u16(CPU* cpu){
+    uint16_t imm = fetch16(cpu);
+    cpu->pc = imm;
+    TICK_M(1);
+}
+
+static void JP_cc_u16(CPU* cpu, bool cond){
+    if(cond)
+        JP_u16(cpu);
+    else
+        TICK_M(2);
+}
+
+static void JP_HL(CPU* cpu){
+    cpu->pc = cpu->hl;
+}
+
+static void JR_i8(CPU* cpu){
+    cpu->pc += (int8_t)fetch(cpu);
+    TICK_M(1);
+}
+
+static void JR_cc_i8(CPU* cpu, bool cond){
+    if(cond)
+        JR_i8(cpu);
+    else
+        TICK_M(1);
+}   
+
+static void RET(CPU* cpu){
+    POP_r16(cpu, &cpu->pc);
+    TICK_M(1);
+}
+
+static void RET_cc(CPU* cpu, bool cond){
+    if(cond){
+        RET(cpu);
+        TICK_M(1);
+    } else 
+        TICK_M(1);
+}
+
+static void RETI(CPU* cpu){
+    RET(cpu);
+    DI(cpu);
+}
+
+static void RST(CPU* cpu, RESET_VEC vec){
+    PUSH_r16(cpu, cpu->pc);
+    cpu->pc = vec;
+    TICK_M(1);
+}
+
 typedef void(*InstrFunc)(CPU*);
-static InstrFunc fetchInstruction(CPU* cpu, uint8_t opcode){
-    switch(opcode)
-    {
+static InstrFunc fetchInstruction(CPU* cpu){
+     uint8_t opcode = fetch(cpu);
+    switch(opcode){
     case 0x00: NOP(cpu);                            break;
     case 0x01: LD_r16_u16(cpu, &cpu->bc);           break;
     case 0x02: LD_pr16_A(cpu, cpu->bc);             break;
@@ -650,11 +981,11 @@ static InstrFunc fetchInstruction(CPU* cpu, uint8_t opcode){
     case 0xEF: RST(cpu, _V28h);                     break;
 
     case 0xF0: LDH_A_pu8(cpu);                      break;
-    case 0xF1: POP_AF(cpu);                         break;
+    case 0xF1: POP_r16(cpu, &cpu->af);              break;
     case 0xF2: LDH_A_pC(cpu);                       break;
     case 0xF3: DI(cpu);                             break;
     case 0xF4: PANIC;                               break;
-    case 0xF5: PUSH_r16(cpu, cpu->af);              break;
+    case 0xF5: PUSH_AF(cpu);                        break;
     case 0xF6: OR_u8(cpu);                          break;
     case 0xF7: RST(cpu, _V30h);                     break;
     case 0xF8: LD_HL_SPi8(cpu);                     break;
@@ -665,8 +996,23 @@ static InstrFunc fetchInstruction(CPU* cpu, uint8_t opcode){
     case 0xFD: PANIC;                               break;
     case 0xFE: CP_u8(cpu);                          break;
     case 0xFF: RST(cpu, _V38h);                     break;
-
     default: 
         PANIC;
     }
+    return NULL;
+}
+
+CPU* createCPU(void){
+    CPU* cpu = malloc(sizeof(*cpu));
+    memset(cpu, 0, sizeof(*cpu));
+    return cpu;
+}
+
+void destroyCPU(CPU* cpu){
+    free(cpu);
+}
+
+void updateCPU(CPU* cpu){
+    InstrFunc func = fetchInstruction(cpu);
+    func(cpu);
 }
