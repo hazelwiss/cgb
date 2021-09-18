@@ -14,3 +14,5 @@ set(C_FLAGS "-g -O0 -Wall")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${C_FLAGS}")
 
 add_executable(cgb ${SRC})
+
+target_link_libraries(cgb -lSDL2)

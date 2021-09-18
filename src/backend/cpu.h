@@ -6,18 +6,20 @@
 #pragma once
 #include<utility.h>
 #include"memory.h"
+#include"ppu.h"
+#include"scheduler.h"
 
 #define REGISTER_UNION(UPPER, LOWER)    \
 union{                                  \
-struct{ uint8_t UPPER; uint8_t LOWER; }; uint16_t UPPER ##LOWER;  };
+struct{ uint8_t LOWER; uint8_t UPPER; }; uint16_t UPPER ##LOWER;  }
 
-typedef struct{
+typedef struct CPU{
     union{
         struct{
-            uint8_t a;
             struct{
-                uint8_t z:1, n:1, h:1, c:1;
+                uint8_t unused:4, c:1, h:1, n:1, z:1; 
             } f;
+            uint8_t a;
         };
         uint16_t af;
     };
@@ -27,7 +29,9 @@ typedef struct{
     uint16_t sp;
     uint16_t pc;
     Memory memory;
-    size_t t_cycles;
+    PPU ppu;
+    Scheduler sched;
+    uint64_t t_cycles;
     bool ime;
 } CPU;
 
@@ -35,3 +39,5 @@ CPU* createCPU(void);
 void destroyCPU(CPU*);
 
 void updateCPU(CPU*);
+
+void tickM(CPU* cpu, size_t cycles);
