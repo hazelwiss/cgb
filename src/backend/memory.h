@@ -20,6 +20,7 @@ typedef struct{
             uint8_t oam[OAM_END + 1 - OAM_BEG];
             struct {
                 uint8_t r_if, r_ie;
+                uint8_t div, tima, tma, tac;
                 uint8_t data[IO_END + 1   - IO_BEG];
             } io;
         } slowmem;

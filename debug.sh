@@ -1,0 +1,1 @@
+gdb ./build/bin/cgb

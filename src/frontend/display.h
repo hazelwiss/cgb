@@ -6,9 +6,7 @@ typedef struct CPU CPU;
 
 void initDisplay(struct CPU* cpu, const char* name, size_t width, size_t height);
 
-void updateMainWindow(const void* pixeldata, size_t row_length);
-
-void updateSubwindows(void);
+void updateWindows(const void* pixeldata, size_t row_length);
 
 void setRenderTileMap(bool);
 

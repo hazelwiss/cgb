@@ -32,6 +32,7 @@ typedef struct CPU{
     PPU ppu;
     Scheduler sched;
     uint64_t t_cycles;
+    bool halted;
     bool ime;
 } CPU;
 

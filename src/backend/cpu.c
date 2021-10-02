@@ -11,7 +11,6 @@
 void tickM(CPU* cpu, size_t cycles){
     size_t t_cycles = cycles*4;
     cpu->t_cycles+=t_cycles; 
-    while(t_cycles--) tickPPU(&cpu->ppu, &cpu->memory);
 }
 
 typedef enum{
@@ -656,7 +655,9 @@ static void DAA(CPU* cpu){
     SET_Z(cpu->a == 0);
 }
 
-static void HALT(CPU* cpu){}
+static void HALT(CPU* cpu){
+    cpu->halted = true;
+}
 
 static void STOP(CPU* cpu){
     PANIC;
@@ -674,7 +675,7 @@ static void DI(CPU* cpu){
 }
 
 static void EI(CPU* cpu){
-    scheduleEvent(&cpu->sched, 1, eventEI);
+    scheduleEvent(&cpu->sched, 1, eEI);
 }
 
 static void SCF(CPU* cpu){
@@ -847,7 +848,6 @@ static void RST(CPU* cpu, RESET_VEC vec){
 
 static void fetchAndExecuteInstruction(CPU* cpu){
     uint8_t opcode = fetch(cpu);
-    //printf("%4X -> %2X   a: %2X\n", cpu->pc-1, opcode, cpu->a);
     switch(opcode){
     case 0x00: NOP(cpu);                            break;
     case 0x01: LD_r16_u16(cpu, &cpu->bc);           break;
@@ -1038,7 +1038,6 @@ CPU* createCPU(void){
     CPU* cpu = malloc(sizeof(*cpu));
     memset(cpu, 0, sizeof(*cpu));
     initScheduler(&cpu->sched, cpu);
-    scheduleEvent(&cpu->sched, 1, eventUnmountBootROM);
     cpu->memory.sched = &cpu->sched;
     return cpu;
 }
@@ -1048,6 +1047,9 @@ void destroyCPU(CPU* cpu){
 }
 
 void updateCPU(CPU* cpu){
-    fetchAndExecuteInstruction(cpu);
+    if(!cpu->halted)
+        fetchAndExecuteInstruction(cpu);
+    else
+        tickM(cpu, 1);
     tickScheduler(&cpu->sched);
 }

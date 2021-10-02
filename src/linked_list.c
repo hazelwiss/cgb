@@ -14,8 +14,8 @@ static void recursiveDestroyNode(struct ListNode* node){
 }
 
 void destroyList(LinkedList* list){
-    recursiveDestroyNode(list->begin);
-    recursiveDestroyNode(list->end);
+    recursiveDestroyNode(list->internal.beg);
+    recursiveDestroyNode(list->internal.end);
 }
 
 static void recursiveAddNode(LinkedList* list, struct ListNode* node, size_t cycles, EventFunc func){

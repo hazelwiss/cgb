@@ -13,6 +13,10 @@ struct ListNode{
 typedef struct LinkedList{
     struct ListNode* begin;
     struct ListNode* end;
+    struct {
+        struct ListNode* beg;
+        struct ListNode* end;
+    } internal;
 } LinkedList;
 
 void initList(LinkedList*);

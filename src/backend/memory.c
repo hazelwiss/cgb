@@ -2,6 +2,21 @@
 #include<stdio.h>
 #include<string.h>
 #include<backend/events.h>
+#include<backend/cpu.h>
+
+#define IO_DIV 0x04
+#define IO_TIMA 0x05
+#define IO_TMA 0x06
+#define IO_TAC 0x07
+#define IO_IF 0x0F
+#define IO_LCDC 0x40
+#define IO_STAT 0x41
+#define IO_SCY 0x42 
+#define IO_SCX 0x43 
+#define IO_LY 0x44
+#define IO_LYC 0x45 
+#define IO_WY 0x4A
+#define IO_WX 0x4B
 
 static bool isSlowMemAccess(uint16_t adr){
     switch(adr){
@@ -10,6 +25,7 @@ static bool isSlowMemAccess(uint16_t adr){
     case OAM_BEG    ...     OAM_END:  
     case IO_BEG     ...     IO_END:   
     case IE:   
+    case 0x100:
         return true;
     }
     return false;
@@ -27,29 +43,27 @@ static void writeVRAM(Memory* mem, uint16_t adr, uint8_t val){
     mem->mmap.slowmem.vram[adr-VRAM_BEG] = val;
 }
 
-static void evaluateInterrupts(Memory* mem, uint8_t val){
-    mem->mmap.slowmem.io.r_if = val;
-    if(val & BIT(0)){
-
-    } else if(val & BIT(1)){
-
-    } else if(val & BIT(2)){
-        eventInterruptTimer(mem->sched);
-    } else if(val & BIT(3)){
-
-    } else if(val & BIT(4)){
-
-    }
-}
-
 static uint8_t readIO(Memory* mem, uint16_t adr){
     uint16_t real_adr = adr-IO_BEG;
     if(real_adr > IO_END)
         PANIC;
     switch(real_adr){
-    case 0x0F: return mem->mmap.slowmem.io.r_if;
-    default:
-        return mem->mmap.slowmem.io.data[adr-IO_BEG];
+    case IO_DIV:    return mem->mmap.slowmem.io.div;
+    case IO_TIMA:   return mem->mmap.slowmem.io.tima; 
+    case IO_TMA:    return mem->mmap.slowmem.io.tma;
+    case IO_TAC:    return mem->mmap.slowmem.io.tac;
+    case IO_LCDC:   return mem->sched->reference->ppu.lcdc;
+    case IO_STAT:   return mem->sched->reference->ppu.stat;
+    case IO_SCY:    return mem->sched->reference->ppu.scy;
+    case IO_SCX:    return mem->sched->reference->ppu.scx;
+    case IO_LY:{
+        return ppuReadLY(&mem->sched->reference->ppu, mem->sched->reference->t_cycles);
+    }     
+    case IO_LYC:    return mem->sched->reference->ppu.lyc;
+    case IO_WY:     return mem->sched->reference->ppu.wy;
+    case IO_WX:     return mem->sched->reference->ppu.wx;
+    case IO_IF:     return mem->mmap.slowmem.io.r_if;
+    default:        return mem->mmap.slowmem.io.data[adr-IO_BEG];
     }
 }
 
@@ -58,10 +72,78 @@ static void writeIO(Memory* mem, uint16_t adr, uint8_t val){
     if(real_adr > IO_END)
         PANIC;
     switch(real_adr){
-    case 0x05: break;
-    case 0x06: break;
-    case 0x0F:{
-        evaluateInterrupts(mem, val);
+    case IO_TIMA:{
+        mem->mmap.slowmem.io.tima = val;
+        if(mem->mmap.slowmem.io.tac&BIT(2)){
+            switch(mem->mmap.slowmem.io.tac&0b11){
+            case 0:
+                scheduleEvent(mem->sched, (0xFF-val)*1024, eTIMER_INTERRUPT);
+                break;
+            case 1:
+                scheduleEvent(mem->sched, (0xFF-val)*16, eTIMER_INTERRUPT);
+                break;
+            case 2:
+                scheduleEvent(mem->sched, (0xFF-val)*64, eTIMER_INTERRUPT);
+                break;
+            case 3:
+                scheduleEvent(mem->sched, (0xFF-val)*256, eTIMER_INTERRUPT);
+                break;
+            }
+        }
+        break;
+    }
+    case IO_TMA:{
+        mem->mmap.slowmem.io.tma = val;
+        break;
+    }
+    case IO_TAC:{
+        mem->mmap.slowmem.io.tac = val;
+        break;
+    }
+    case IO_LCDC:{
+        if(val & BIT(7) && !(mem->sched->reference->ppu.lcdc & BIT(7))){
+            mem->sched->reference->ppu.cycles_since_last_frame = mem->sched->reference->t_cycles;
+            eventPPUFrame(mem->sched);
+        }
+        ppuCatchup(&mem->sched->reference->ppu, mem, mem->sched->reference->t_cycles);
+        mem->sched->reference->ppu.lcdc = val;
+        break;
+    }
+    case IO_STAT:{
+        mem->sched->reference->ppu.stat = val;
+        break;
+    } 
+    case IO_SCY:{
+        ppuCatchup(&mem->sched->reference->ppu, mem, mem->sched->reference->t_cycles);
+        mem->sched->reference->ppu.scy = val;
+        break;
+    }
+    case IO_SCX:{
+        ppuCatchup(&mem->sched->reference->ppu, mem, mem->sched->reference->t_cycles);
+        mem->sched->reference->ppu.scx = val;
+        break;
+    } 
+    case IO_LY:{
+        //  Read only.
+        break;
+    }   
+    case IO_LYC:{
+        mem->sched->reference->ppu.lyc = val;
+        break;
+    }  
+    case IO_WY:{
+        ppuCatchup(&mem->sched->reference->ppu, mem, mem->sched->reference->t_cycles);
+        mem->sched->reference->ppu.wy = val;
+        break;
+    }  
+    case IO_WX:{
+        ppuCatchup(&mem->sched->reference->ppu, mem, mem->sched->reference->t_cycles);
+        mem->sched->reference->ppu.wx = val;
+        break;
+    }   
+    case IO_IF:{
+        mem->mmap.slowmem.io.r_if = val;
+        eventEvaluateInterrupts(mem->sched);
         break;
     } 
     default:
@@ -93,6 +175,8 @@ uint8_t memRead(Memory* mem, uint16_t adr){
         case OAM_BEG ... OAM_END:   return readOAM(mem, adr);
         case IO_BEG ... IO_END:     return readIO(mem, adr);
         case IE:                    return mem->mmap.slowmem.io.r_ie;
+        case 0x100:                 unmountBootROM(mem);
+                                    return mem->mmap.fastmem[0x100];
         default: PANIC;
         }
     } else
@@ -107,8 +191,9 @@ void memWrite(Memory* mem, uint16_t adr, uint8_t val){
         case ERAM_BEG ... ERAM_END: writeERAM(mem, adr, val);   break;
         case OAM_BEG ... OAM_END:   writeOAM(mem, adr, val);    break;
         case IO_BEG ... IO_END:     writeIO(mem, adr, val);     break;
-        case IE:    evaluateInterrupts(mem, val);
-                    mem->mmap.slowmem.io.r_ie = val;               break;
+        case IE:    mem->mmap.slowmem.io.r_ie = val;
+                    eventEvaluateInterrupts(mem->sched);        break;
+        case 0x100:                 writeRom(mem, 0x100, val);  break;
         default: PANIC;
         }
     } else if(adr <= 0x7FFF)
@@ -141,7 +226,7 @@ void loadROM(Memory* mem, const char* path){
     file = fopen(mem->boot_rom_path, "r");
     if(!file){
         fprintf(stderr, "%s bootrom could not be found! Panicking!\n", mem->boot_rom_path);
-        PANIC
+        PANIC;
     }
     fread(mem->boot_rom, 1, 256, file);
     memcpy(mem->mmap.fastmem, mem->boot_rom, 256);
