@@ -11,7 +11,8 @@ include_directories("${PROJECT_SOURCE_DIR}/src")
 file(GLOB_RECURSE SRC "src/*.c" "src/*.h")
 
 set(C_FLAGS "-g -O0 -Wall")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${C_FLAGS}")
+set(C_LIBS "-lpthread")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${C_FLAGS} ${C_LIBS}")
 
 add_executable(cgb ${SRC})
 

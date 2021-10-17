@@ -15,6 +15,7 @@
 #define IO_SCX 0x43 
 #define IO_LY 0x44
 #define IO_LYC 0x45 
+#define IO_BGP 0x47
 #define IO_WY 0x4A
 #define IO_WX 0x4B
 
@@ -56,10 +57,9 @@ static uint8_t readIO(Memory* mem, uint16_t adr){
     case IO_STAT:   return mem->sched->reference->ppu.stat;
     case IO_SCY:    return mem->sched->reference->ppu.scy;
     case IO_SCX:    return mem->sched->reference->ppu.scx;
-    case IO_LY:{
-        return ppuReadLY(&mem->sched->reference->ppu, mem->sched->reference->t_cycles);
-    }     
+    case IO_LY:     return mem->sched->reference->ppu.ly;     
     case IO_LYC:    return mem->sched->reference->ppu.lyc;
+    case IO_BGP:    return mem->sched->reference->ppu.bgp;
     case IO_WY:     return mem->sched->reference->ppu.wy;
     case IO_WX:     return mem->sched->reference->ppu.wx;
     case IO_IF:     return mem->mmap.slowmem.io.r_if;
@@ -101,25 +101,19 @@ static void writeIO(Memory* mem, uint16_t adr, uint8_t val){
         break;
     }
     case IO_LCDC:{
-        if(val & BIT(7) && !(mem->sched->reference->ppu.lcdc & BIT(7))){
-            mem->sched->reference->ppu.cycles_since_last_frame = mem->sched->reference->t_cycles;
-            eventPPUFrame(mem->sched);
-        }
-        ppuCatchup(&mem->sched->reference->ppu, mem, mem->sched->reference->t_cycles);
         mem->sched->reference->ppu.lcdc = val;
         break;
     }
     case IO_STAT:{
-        mem->sched->reference->ppu.stat = val;
+        mem->sched->reference->ppu.stat = (val&(~0b11)) | 
+            (mem->sched->reference->ppu.stat&0b11);
         break;
     } 
     case IO_SCY:{
-        ppuCatchup(&mem->sched->reference->ppu, mem, mem->sched->reference->t_cycles);
         mem->sched->reference->ppu.scy = val;
         break;
     }
     case IO_SCX:{
-        ppuCatchup(&mem->sched->reference->ppu, mem, mem->sched->reference->t_cycles);
         mem->sched->reference->ppu.scx = val;
         break;
     } 
@@ -131,13 +125,15 @@ static void writeIO(Memory* mem, uint16_t adr, uint8_t val){
         mem->sched->reference->ppu.lyc = val;
         break;
     }  
+    case IO_BGP:{
+        mem->sched->reference->ppu.bgp = val;
+        break;
+    }
     case IO_WY:{
-        ppuCatchup(&mem->sched->reference->ppu, mem, mem->sched->reference->t_cycles);
         mem->sched->reference->ppu.wy = val;
         break;
     }  
     case IO_WX:{
-        ppuCatchup(&mem->sched->reference->ppu, mem, mem->sched->reference->t_cycles);
         mem->sched->reference->ppu.wx = val;
         break;
     }   

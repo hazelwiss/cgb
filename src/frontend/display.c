@@ -1,5 +1,7 @@
 #include"display.h"
 #include<backend/cpu.h>
+#include<pthread.h>
+#include<stdatomic.h>
 
 #define DEFAULT_R 0xFF
 #define DEFAULT_G 0xFF
@@ -11,6 +13,10 @@ struct{
     SDL_Renderer* renderer;
     SDL_Texture* texture;
     struct {
+        bool render_bg_map;
+        bool render_tile_map;
+    } settings;
+    struct {
         SDL_Window* bg_map_w;
         SDL_Renderer* bg_map_r;
         SDL_Texture* bg_map_t;
@@ -20,8 +26,6 @@ struct{
     } subwindows;
 } display;
 
-bool render_bg_map      = false;
-bool render_tile_map    = false;
 const size_t BG_MAP_WIDTH       = 256+32;
 const size_t BG_MAP_HEIGHT      = 256+32;
 const size_t TILES_PER_LINE     = 16;
@@ -29,46 +33,44 @@ const size_t TILE_LINE_COUNT    = 128/TILES_PER_LINE;
 const size_t TILE_MAP_WIDTH     = (TILES_PER_LINE)*8 + TILES_PER_LINE;
 const size_t TILE_MAP_HEIGHT    = TILE_LINE_COUNT*8 + TILE_LINE_COUNT;
 
-static void updateSubwindows(void);
+pthread_mutex_t g_mut;
+pthread_t g_thread;
+struct ThreadSDLEntryData g_data;
+atomic_bool g_is_ready_to_draw = true;
+atomic_bool g_draw_order = false;
 
-void initDisplay(CPU* cpu, const char* name, size_t width, size_t height){
-    SDL_CreateWindowAndRenderer(160, 144, SDL_WINDOW_RESIZABLE, 
-    	&display.window, &display.renderer);
-    display.texture = SDL_CreateTexture(display.renderer, SDL_PIXELFORMAT_RGB888, SDL_TEXTUREACCESS_TARGET, width, height);
-    SDL_SetRenderDrawColor(display.renderer, DEFAULT_R, DEFAULT_G, DEFAULT_B, 0xFF);
-    SDL_RenderClear(display.renderer);
-    SDL_RenderPresent(display.renderer);
-    display.reference = cpu;
-    //  init background map
-    if(render_bg_map){
-        SDL_CreateWindowAndRenderer(BG_MAP_WIDTH*2, BG_MAP_HEIGHT*2, SDL_WINDOW_RESIZABLE, 
-        	&display.subwindows.bg_map_w, &display.subwindows.bg_map_r);
-        SDL_SetWindowTitle(display.subwindows.bg_map_w, "background map viewer");
-        display.subwindows.bg_map_t = SDL_CreateTexture(display.subwindows.bg_map_r, SDL_PIXELFORMAT_RGB888, SDL_TEXTUREACCESS_TARGET, 
-            BG_MAP_WIDTH, BG_MAP_HEIGHT);
-        SDL_SetRenderDrawColor(display.subwindows.bg_map_r, DEFAULT_R, DEFAULT_G, DEFAULT_B, 0xFF);
-        SDL_RenderClear(display.subwindows.bg_map_r);
-        SDL_RenderPresent(display.subwindows.bg_map_r);
-    }
-    //  init tile map
-    if(render_tile_map){
-        SDL_CreateWindowAndRenderer(TILE_MAP_WIDTH*3, TILE_MAP_HEIGHT*3, SDL_WINDOW_RESIZABLE, 
-        	&display.subwindows.tile_w, &display.subwindows.tile_r);
-        SDL_SetWindowTitle(display.subwindows.tile_w, "tile map viewer");
-        display.subwindows.tile_t = SDL_CreateTexture(display.subwindows.tile_r, SDL_PIXELFORMAT_RGB888, SDL_TEXTUREACCESS_TARGET,
-            TILE_MAP_WIDTH, TILE_MAP_HEIGHT);
-        SDL_SetRenderDrawColor(display.subwindows.tile_r, DEFAULT_R, DEFAULT_G, DEFAULT_B, 0xFF);
-        SDL_RenderClear(display.subwindows.tile_r);
-        SDL_RenderPresent(display.subwindows.tile_r);
-    }
+__attribute__((unused))
+static void createBGMapWindow(void){
+    SDL_CreateWindowAndRenderer(BG_MAP_WIDTH*2, BG_MAP_HEIGHT*2, SDL_WINDOW_RESIZABLE, 
+    	&display.subwindows.bg_map_w, &display.subwindows.bg_map_r);
+    SDL_SetWindowTitle(display.subwindows.bg_map_w, "background map viewer");
+    display.subwindows.bg_map_t = SDL_CreateTexture(display.subwindows.bg_map_r, SDL_PIXELFORMAT_RGB888, SDL_TEXTUREACCESS_TARGET, 
+        BG_MAP_WIDTH, BG_MAP_HEIGHT);
+    SDL_SetRenderDrawColor(display.subwindows.bg_map_r, DEFAULT_R, DEFAULT_G, DEFAULT_B, 0xFF);
+    SDL_RenderClear(display.subwindows.bg_map_r);
+    SDL_RenderPresent(display.subwindows.bg_map_r);
 }
 
-void updateWindows(const void* pixeldata, size_t row_length){
-    SDL_RenderClear(display.renderer);
-    SDL_UpdateTexture(display.texture, NULL, pixeldata, row_length*4);
-    SDL_RenderCopy(display.renderer, display.texture, NULL, NULL);
-    SDL_RenderPresent(display.renderer);
-    updateSubwindows();
+__attribute__((unused))
+static void createTileMapWindow(void){
+    SDL_CreateWindowAndRenderer(TILE_MAP_WIDTH*3, TILE_MAP_HEIGHT*3, SDL_WINDOW_RESIZABLE, 
+    	&display.subwindows.tile_w, &display.subwindows.tile_r);
+    SDL_SetWindowTitle(display.subwindows.tile_w, "tile map viewer");
+    display.subwindows.tile_t = SDL_CreateTexture(display.subwindows.tile_r, SDL_PIXELFORMAT_RGB888, SDL_TEXTUREACCESS_TARGET,
+        TILE_MAP_WIDTH, TILE_MAP_HEIGHT);
+    SDL_SetRenderDrawColor(display.subwindows.tile_r, DEFAULT_R, DEFAULT_G, DEFAULT_B, 0xFF);
+    SDL_RenderClear(display.subwindows.tile_r);
+    SDL_RenderPresent(display.subwindows.tile_r);
+}
+
+__attribute__((unused))
+static void destroyBGMapWindow(void){
+
+}
+
+__attribute__((unused))
+static void destroyTileMapWindow(void){
+
 }
 
 static void renderBGMapWindow(void){
@@ -121,7 +123,7 @@ static void renderBGMapWindow(void){
     SDL_RenderPresent(display.subwindows.bg_map_r); 
 }
 
-static void renderTileMapWindow(){
+static void renderTileMapWindow(void){
     uint32_t data[TILE_MAP_HEIGHT][TILE_MAP_WIDTH];
     for(size_t tile = 0; tile < 128; ++tile){
         size_t x = (tile%TILES_PER_LINE)*9;
@@ -162,16 +164,63 @@ static void renderTileMapWindow(){
 }
 
 static void updateSubwindows(void){
-    if(render_bg_map)
+    if(display.settings.render_bg_map)
         renderBGMapWindow();
-    if(render_tile_map)
+    if(display.settings.render_tile_map)
         renderTileMapWindow();
 }
 
-void setRenderTileMap(bool b){
-    render_tile_map = b;
+static void threadedSDLLoop(void){
+    while(true){
+        g_is_ready_to_draw = true;
+        while(!g_draw_order)
+            SDL_Delay(10);
+        pthread_mutex_lock(&g_mut);
+        g_draw_order = false;
+        g_is_ready_to_draw = false;
+        SDL_PumpEvents();
+        SDL_RenderClear(display.renderer);
+        SDL_RenderCopy(display.renderer, display.texture, NULL, NULL);
+        pthread_mutex_unlock(&g_mut);
+        SDL_RenderPresent(display.renderer);
+        updateSubwindows();
+        //SDL_Delay(30);
+    }
 }
 
-void setRenderBGMap(bool b){
-    render_bg_map = b;
+struct ThreadSDLEntryData{
+    CPU* cpu; 
+    const char* name; 
+    size_t width, height;
+};
+static void* threadedSDLStart(void* input){
+    SDL_Init(SDL_INIT_VIDEO);
+    SDL_GL_SetSwapInterval(-1);
+    struct ThreadSDLEntryData data = *(struct ThreadSDLEntryData*)input;
+    display.window = SDL_CreateWindow(data.name, 0, 0, 160, 144, SDL_WINDOW_RESIZABLE);
+    display.renderer = SDL_CreateRenderer(display.window, -1, 0);
+    display.texture = SDL_CreateTexture(display.renderer, SDL_PIXELFORMAT_RGB888, SDL_TEXTUREACCESS_TARGET, data.width, data.height);
+    SDL_SetRenderDrawColor(display.renderer, DEFAULT_R, DEFAULT_G, DEFAULT_B, 0xFF);
+    SDL_RenderClear(display.renderer);
+    SDL_RenderPresent(display.renderer);
+    display.reference = data.cpu;
+    threadedSDLLoop();
+    return NULL;
+}
+
+void initDisplay(CPU* cpu, const char* name, size_t width, size_t height){
+    pthread_mutex_init(&g_mut, NULL);
+    g_data.cpu        = cpu;
+    g_data.name       = name;
+    g_data.width      = width;
+    g_data.height     = height;
+    pthread_create(&g_thread, NULL, threadedSDLStart, &g_data);
+}
+
+void updateWindows(const void* pixeldata, size_t row_length){
+    while(!g_is_ready_to_draw);
+    pthread_mutex_lock(&g_mut);
+    SDL_UpdateTexture(display.texture, NULL, pixeldata, row_length*4);
+    g_draw_order = true;
+    pthread_mutex_unlock(&g_mut);
 }

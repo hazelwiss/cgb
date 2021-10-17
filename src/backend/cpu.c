@@ -11,6 +11,8 @@
 void tickM(CPU* cpu, size_t cycles){
     size_t t_cycles = cycles*4;
     cpu->t_cycles+=t_cycles; 
+    while(t_cycles--)
+        ppuTick(&cpu->ppu, &cpu->memory);
 }
 
 typedef enum{

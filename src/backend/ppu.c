@@ -1,13 +1,47 @@
 #include"ppu.h"
+#include<backend/events.h>
 #define TILES_PER_ROW                   20
 
+__always_inline void checkLYC(PPU* ppu, Memory* mem){
+    if(ppu->ly == ppu->lyc){
+        if(ppu->stat & BIT(6)){
+            eventSTATInterrupt(mem->sched);
+        }
+        ppu->stat |= BIT(2);
+    } else
+        ppu->stat &= ~BIT(2);
+}
+
+__always_inline void changeMode(PPU* ppu, Memory* mem, enum PPUMode mode){
+    ppu->stat = (ppu->stat&(~0b11)) | mode;
+    ppu->cur_mode = mode;
+    switch(mode){
+    case PPUMODE0:
+        if(ppu->stat&BIT(3))
+            eventSTATInterrupt(mem->sched);
+        break;
+    case PPUMODE1:
+        if(ppu->stat&BIT(4))
+            eventSTATInterrupt(mem->sched);
+        break;
+    case PPUMODE2:
+        if(ppu->stat&BIT(5))
+            eventSTATInterrupt(mem->sched);
+        break;
+    case PPUMODE3:
+        break;
+    default:
+        PANIC;
+    }
+}
+
 __attribute_warn_unused_result__
-__always_inline uint32_t getPixelValue(PPU* ppu, size_t x, size_t y, uint8_t data_hi, uint8_t data_lo){
+__always_inline uint32_t getBGWNPixelValue(PPU* ppu, size_t x, size_t y, uint8_t data_hi, uint8_t data_lo){
     if(y >= RES_Y || x >= RES_X)
         PANIC;
     bool low    = (data_lo & (BIT(7) >> (x%8))); 
     bool high   = (data_hi & (BIT(7) >> (x%8)));
-    size_t pixel_value = low | (high << 1);
+    size_t pixel_value =  (ppu->bgp >> ((low | (high << 1))*2))&0b11;
     uint32_t value;
     switch(pixel_value){
     case 0: value = 0xFFFFFF;   break;
@@ -19,90 +53,120 @@ __always_inline uint32_t getPixelValue(PPU* ppu, size_t x, size_t y, uint8_t dat
     return value;
 }
 
-__always_inline void internalScanlineBGWNUpdateTile(PPU* ppu, Memory* mem, 
-    uint8_t x_pos, uint8_t y_pos, uint16_t map_base_adr, 
-    uint16_t tile_base_adr, int16_t tile_n)
-{
-    uint8_t tile_index = memRead(mem, map_base_adr + ((y_pos + ppu->scy)/8)*32 + tile_n);
+__always_inline void updateFIFO(PPU* ppu, Memory* mem){
     for(size_t x = 0; x < 8; ++x){
-        size_t index = tile_base_adr + tile_index*16 + ((y_pos + ppu->scy )%8)*2;
-        uint8_t tile_lo = memRead(mem, index);
-        uint8_t tile_hi = memRead(mem, index + 1);
-        ppu->bg_pixel_data[y_pos][x_pos + x] 
-            = getPixelValue(ppu, x_pos+x, y_pos, tile_hi, tile_lo);
+        ppu->pixels[ppu->ly][ppu->fetcher.x + x] 
+            = getBGWNPixelValue(ppu, ppu->fetcher.x+x, ppu->ly, ppu->fetcher.datahigh, ppu->fetcher.datalow);
     }
 }
 
-__always_inline void internalScanlineBGWNUpdate(PPU* ppu, Memory* mem, bool map_9C00, bool mode_8000){
-    size_t adr = (((ppu->scy+ppu->local.ly)/8)%32)*32 + ((ppu->scx/8)%32);
+__always_inline void fetchTileDataBGWN(
+    PPU* ppu, 
+    Memory* mem, 
+    bool is_hi)
+{
+    bool mode_8000 = ppu->lcdc & BIT(4);
+    uint8_t* data = is_hi ? &ppu->fetcher.datahigh : &ppu->fetcher.datalow;
+    uint16_t offset = ppu->is_window_drawing ? ppu->window_ly+ppu->wy : ppu->scy+ppu->ly;
+    if(mode_8000){
+        *data = memRead(mem, 0x8000 + ppu->fetcher.tile_n*16 + (offset%8)*2 + is_hi);
+    } else{
+        *data = memRead(mem, 0x9000 + ((int8_t)ppu->fetcher.tile_n)*16 + (offset%8)*2 + is_hi);
+    }
+}
+
+static void fetchTileNumberBGWN(PPU* ppu, Memory* mem){
+    uint16_t offset_y   = ppu->is_window_drawing ? ppu->window_ly : ppu->scy+ppu->ly;
+    uint16_t offset_x   = ppu->is_window_drawing ? ppu->fetcher.x - (ppu->wx-7) : ppu->fetcher.x; 
+    size_t adr = ((offset_y/8)%32)*32 + ((offset_x/8)%32);
+    bool map_9C00 = ppu->lcdc & (ppu->is_window_drawing ? BIT(6) : BIT(3));
     if(map_9C00)
         adr += 0x9C00;
     else
         adr += 0x9800;
-    if(mode_8000){
-        for(size_t tile_n = 0; tile_n < 20; ++tile_n){
-            uint8_t x = (tile_n%TILES_PER_ROW)*8;
-            internalScanlineBGWNUpdateTile(ppu, mem, x, ppu->local.ly, 
-                adr, 0x8000, tile_n);
-        }
-    } else{
-        for(size_t tile_n = 0; tile_n < 20; ++tile_n){
-            uint8_t x = (tile_n%TILES_PER_ROW)*8;
-            internalScanlineBGWNUpdateTile(ppu, mem, x, ppu->local.ly, 
-                adr, 0x9000, (int8_t)tile_n);
-        }
-    }
+    ppu->fetcher.tile_n = memRead(mem, adr);
 }
 
-static void ppuScanlineUpdateBGAndWNData(PPU* ppu, Memory* mem){
-    bool map_9C00 = ppu->lcdc & BIT(3);
-    bool mode_8000 = ppu->lcdc & BIT(4);
-    internalScanlineBGWNUpdate(ppu, mem, map_9C00, mode_8000);
-    ppu->bg_wn_updated = true;
-}
-
-void ppuCatchup(PPU* ppu, Memory* mem, uint64_t tot_cycles){
-    if((ppu->lcdc & BIT(7)) == 0)
-        return;
-    ppu->ly += (tot_cycles - ppu->cycles_since_last_frame)/SCANLINE_MAX_CYCLES;
-    if(ppu->ly > RES_Y)
+static void updateBGWN(PPU* ppu, Memory* mem){
+    switch(ppu->fetcher.mode){
+    case 0: break;
+    case 1:
+        ppu->is_window_drawing = ppu->is_window_drawing ? ppu->is_window_drawing : 
+            ppu->lcdc & BIT(5) && ppu->ly >= ppu->wy && ppu->fetcher.x >= ppu->wx-7;
+        ppu->increment_wly = ppu->increment_wly ? ppu->increment_wly : ppu->is_window_drawing;
+        fetchTileNumberBGWN(ppu, mem);
+        break;
+    case 2: break;
+    case 3: 
+        fetchTileDataBGWN(ppu, mem, false);
+        break;
+    case 4: break;
+    case 5:  
+        fetchTileDataBGWN(ppu, mem, true);
+        break;
+    case 6: break;
+    case 7: 
+        updateFIFO(ppu, mem);
+        ppu->fetcher.x += 8;
+        ppu->is_window_drawing = false;
+        break;
+    default:
         PANIC;
-    int32_t diff = ppu->ly - ppu->local.ly;
-    if(diff < 0 || ppu->local.ly + diff > RES_Y)
-        PANIC;
-    do{
-        ppuScanlineUpdateBGAndWNData(ppu, mem);
-        ppu->local.ly += diff != 0;
-    } while(--diff > 0);
-    ppu->cycles_since_last_frame = tot_cycles;
+    }
+    ++ppu->fetcher.mode;
 }
 
-void ppuRenderFrame(PPU* ppu, Memory* mem){
-    if((ppu->lcdc & BIT(7)) == 0)
-        return;
-    for(size_t y = 0; y < RES_Y; ++y){
-        for(size_t x = 0; x < RES_X; ++x){
-            if(y >= ppu->wy && x >= ppu->wx - 7 && ppu->lcdc & BIT(5)){
-                ppu->pixels[y][x] = ppu->wn_pixel_data[y][x];
-            } else{
-                ppu->pixels[y][x] = ppu->bg_pixel_data[y][x];
-            }
-        }
-    }
+static void endOfScanline(PPU* ppu, Memory* mem){
+    ppu->window_ly += ppu->increment_wly;
+    ++ppu->ly;
+    ppu->fetcher.x = 0;
+    ppu->increment_wly = false;
+}
+
+static void ppuMode1(PPU* ppu, Memory* mem){
+    changeMode(ppu, mem, PPUMODE1);
+}
+
+static void ppuMode2(PPU* ppu, Memory* mem){
+    changeMode(ppu, mem, PPUMODE2);
+    checkLYC(ppu, mem);
+}
+
+static void ppuMode3(PPU* ppu, Memory* mem){
+    changeMode(ppu, mem, PPUMODE3);
+}
+
+static void endOfFrame(PPU* ppu, Memory* mem){
+    ppu->ly = 0;
+    ppu->window_ly = 0;
+    ppu->cycles = 0;
+    changeMode(ppu, mem, PPUMODE2);
     updateWindows(ppu->pixels, RES_X);
-    ppu->bg_wn_updated = false;
-} 
-
-static uint8_t e = 2;
-static uint8_t c = 2;
-uint8_t ppuReadLY(PPU* ppu, uint64_t tot_cycles){
-    if((tot_cycles - ppu->cycles_since_last_frame)/SCANLINE_MAX_CYCLES == 0x90){
-        --c;
-        if(!c){
-            --e;
-        }
-        printf("e: %d c: %d\n", e, c);
-    }
-
-    return (tot_cycles - ppu->cycles_since_last_frame)/SCANLINE_MAX_CYCLES;
+    SDL_Delay(30);
 }
+
+void ppuTick(PPU* ppu, Memory* mem){
+    if((ppu->lcdc & BIT(7)) == 0)
+        return;
+    uint32_t scanline_cycles = ppu->cycles % SCANLINE_MAX_CYCLES;
+    if(scanline_cycles < 80){
+        if(scanline_cycles == 0)
+            ppuMode2(ppu, mem);
+    } else if(ppu->ly < RES_Y && scanline_cycles >= 80){
+        if(scanline_cycles == 80){
+            ppuMode3(ppu, mem);
+        }
+        if(ppu->fetcher.x < RES_X){
+            updateBGWN(ppu, mem);
+        } else if(scanline_cycles + 1 >= SCANLINE_MAX_CYCLES){
+            endOfScanline(ppu, mem);
+        } else if(ppu->cur_mode != PPUMODE0){
+            changeMode(ppu, mem, PPUMODE0);
+        }
+    } else if(ppu->cycles + 1 >= FRAME_MAX_CYCLES){
+        endOfFrame(ppu, mem);
+    } else{
+        ppuMode1(ppu, mem);
+    }
+    ++ppu->cycles;
+} 
