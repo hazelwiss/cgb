@@ -1,16 +1,16 @@
 #pragma once
 
 typedef struct Scheduler Scheduler;
-typedef void(*EventFunc)(Scheduler*);
+typedef void (*EventFunc)(Scheduler *);
 
-void eventDI(Scheduler*);
-void eventEI(Scheduler*);
+void eventDI(Scheduler *);
+void eventEI(Scheduler *);
 
-void eventTimerInterrupt(Scheduler*);
-void eventSTATInterrupt(Scheduler*);
-void eventEvaluateInterrupts(Scheduler*);
+void eventTimerInterrupt(Scheduler *);
+void eventSTATInterrupt(Scheduler *);
+void eventEvaluateInterrupts(Scheduler *);
 
-typedef enum{
+typedef enum {
     eDI = 0,
     eEI,
     eTIMER_INTERRUPT,
