@@ -277,10 +277,10 @@ void ppuTick(PPU *ppu, Memory *mem) {
             uint8_t bgp = ppu->bgp;
             if (scanline_cycles >= ppu->fifo_timestamp) {
                 struct SpriteStruct sprite;
-                if (renderSprite(ppu, mem, &sprite)) {
-                    bgp = sprite.flags & BIT(4) ? ppu->obp1 : ppu->obp0;
-                    updateSprite(ppu, mem, &sprite);
-                }
+                // if (renderSprite(ppu, mem, &sprite)) {
+                //    bgp = sprite.flags & BIT(4) ? ppu->obp1 : ppu->obp0;
+                //    updateSprite(ppu, mem, &sprite);
+                //}
                 updateBGWN(ppu, mem);
                 pushToLCD(ppu, bgp);
                 ppu->fifo_timestamp += 8;
@@ -288,6 +288,14 @@ void ppuTick(PPU *ppu, Memory *mem) {
             }
         } else if (scanline_cycles + 1 >= SCANLINE_MAX_CYCLES) {
             endOfScanline(ppu, mem);
+            struct SpriteStruct sprite;
+            for (uint32_t i = 0; i < 10; ++i) {
+                memcpy(&sprite, &ppu->sprite_fifo[i], sizeof(sprite));
+                if (sprite.x_pos) {
+                    uint32_t pixel_colour =
+                        getPixelValue(ppu, , bgp);
+                }
+            }
         } else if (ppu->cur_mode != PPUMODE0) {
             changeMode(ppu, mem, PPUMODE0);
         }
